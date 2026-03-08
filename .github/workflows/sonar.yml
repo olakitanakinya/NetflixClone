@@ -8,7 +8,7 @@ on:
 jobs:
   build-analyze-scan:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: aws-netflix
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -40,7 +40,7 @@ jobs:
 
   deploy:
     needs: build-analyze-scan
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [aws-netflix]
     steps:
       - name: Install Trivy
         run: |
