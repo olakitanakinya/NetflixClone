@@ -6,32 +6,35 @@ on:
       - main
 
 jobs:
+  # Job 1: Build, SonarCloud analysis, Trivy file scan, Docker build & push
   build-analyze-scan:
-    name: Build
+    name: Build and Analyze
     runs-on: build-runner
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # required for better SonarQube analysis
 
-      # Step: Install unzip (required for SonarScanner)
+      # Required for SonarScanner CLI
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      # Step: SonarCloud Scan
+      # SonarCloud scan (stable action version)
       - name: SonarCloud Scan
-        uses: sonarsource/sonarqube-scan-action@master
+        uses: sonarsource/sonarqube-scan-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # No SONAR_HOST_URL needed – action will use SonarCloud by default
-        # Optionally, you can specify the project properties file location:
-        # with:
-        #   projectBaseDir: .
-        #   args: >
-        #     -Dsonar.projectKey=olakitanakinya_NetflixClone
-        #     -Dsonar.organization=olakitanakinya-github
+          # No SONAR_HOST_URL – automatically uses SonarCloud
 
+      # Optional: Block pipeline if quality gate fails
+      - name: SonarCloud Quality Gate check
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # Install Trivy and run filesystem scan (fail on HIGH/CRITICAL)
       - name: Install Trivy
         run: |
           sudo apt-get install wget apt-transport-https gnupg lsb-release -y
@@ -39,20 +42,44 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update
           sudo apt-get install trivy -y
-          trivy fs .
 
-      - name: Docker build and push
+      - name: Trivy filesystem scan
+        run: trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+
+      # Docker Build with layer caching
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
+          build-args: TMDB_V3_API_KEY=${{ secrets.TMDB_API_KEY }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      # Move new cache to old location (for next run)
+      - name: Move cache
         run: |
-          docker build --build-arg TMDB_V3_API_KEY=${{ secrets.TMDB_API_KEY }} -t netflix .
-          docker tag netflix ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+  # Job 2: Deploy – depends on first job's success
   deploy:
     needs: build-analyze-scan
     runs-on: deploy-runner
     steps:
-      - name: Install Trivy
+      - name: Install Trivy (deploy runner)
         run: |
           sudo apt-get update
           sudo apt-get install wget apt-transport-https gnupg lsb-release -y
@@ -61,13 +88,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
-      - name: Pull the docker image
+      - name: Pull the Docker image
         run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
-      - name: Trivy image scan
-        run: trivy image ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
+      - name: Trivy image scan (fail on HIGH/CRITICAL)
+        run: trivy image --severity HIGH,CRITICAL --exit-code 1 ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
-      - name: Run the container netflix
+      - name: Run the container
         run: |
           docker rm -f netflix || true
           docker run -d --name netflix -p 8081:80 ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
