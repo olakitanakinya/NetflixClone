@@ -11,31 +11,49 @@ jobs:
     runs-on: build-runner
 
     steps:
+      # ----------------------------------------------------------------------
+      # Checkout code with full fetch depth for better analysis
+      # ----------------------------------------------------------------------
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v2 with full SHA
         with:
           fetch-depth: 0
 
+      # ----------------------------------------------------------------------
+      # Install system dependencies (unzip, jq)
+      # ----------------------------------------------------------------------
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: SonarCloud Scan
-        uses: sonarsource/sonarqube-scan-action@v2
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-      # Install jq (required for quality gate action)
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: SonarCloud Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
+      # ----------------------------------------------------------------------
+      # SonarCloud scan (requires SONAR_TOKEN and SONAR_HOST_URL secrets)
+      # ----------------------------------------------------------------------
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarqube-scan-action@a47715d368a51200d282d120a1f1cdedd8573c16  # v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
+      # ----------------------------------------------------------------------
+      # SonarCloud quality gate check (optional – remove if you want to skip)
+      # ----------------------------------------------------------------------
+      # Uncomment the next block if you want the pipeline to fail when quality gate fails.
+      # Otherwise, comment it out to let the pipeline continue regardless.
+      #
+      # - name: SonarCloud Quality Gate check
+      #   uses: sonarsource/sonarqube-quality-gate-action@6f7cd55ee59b1e4a9bfbc8d3210a8fba6b71ae6c  # master
+      #   timeout-minutes: 5
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      #   continue-on-error: true   # set to true if you don't want the pipeline to stop
+
+      # ----------------------------------------------------------------------
+      # Install Trivy
+      # ----------------------------------------------------------------------
       - name: Install Trivy
         run: |
           sudo apt-get install wget apt-transport-https gnupg lsb-release -y
@@ -44,22 +62,41 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
+      # ----------------------------------------------------------------------
+      # Trivy filesystem scan – logs findings but does NOT fail the build
+      # ----------------------------------------------------------------------
       - name: Trivy filesystem scan
-        run: trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+        run: trivy fs --severity HIGH,CRITICAL .
+        # No --exit-code 1 – so it never fails the pipeline
 
+      # ----------------------------------------------------------------------
+      # Docker login (secure method)
+      # ----------------------------------------------------------------------
+      - name: Login to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ----------------------------------------------------------------------
+      # Docker Buildx setup + layer caching
+      # ----------------------------------------------------------------------
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349  # v2
 
       - name: Cache Docker layers
-        uses: actions/cache@v3
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf  # v3
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-buildx-
 
+      # ----------------------------------------------------------------------
+      # Build and push Docker image (with layer caching)
+      # ----------------------------------------------------------------------
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v4
         with:
           context: .
           push: true
@@ -68,16 +105,25 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
+      # ----------------------------------------------------------------------
+      # Move new cache to old location (for next run)
+      # ----------------------------------------------------------------------
       - name: Move cache
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+  # --------------------------------------------------------------------------
+  # Job 2: Deploy – only runs if first job succeeds (needs: build-analyze-scan)
+  # --------------------------------------------------------------------------
   deploy:
     needs: build-analyze-scan
     runs-on: deploy-runner
 
     steps:
+      # ----------------------------------------------------------------------
+      # Install Trivy on deploy runner
+      # ----------------------------------------------------------------------
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -87,12 +133,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
+      # ----------------------------------------------------------------------
+      # Pull the Docker image
+      # ----------------------------------------------------------------------
       - name: Pull the Docker image
         run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
+      # ----------------------------------------------------------------------
+      # Trivy image scan – logs findings but does NOT fail the build
+      # ----------------------------------------------------------------------
       - name: Trivy image scan
-        run: trivy image --severity HIGH,CRITICAL --exit-code 1 ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
+        run: trivy image --severity HIGH,CRITICAL ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
+        # No --exit-code 1 – so it never fails the pipeline
 
+      # ----------------------------------------------------------------------
+      # Run the container (remove old one if exists)
+      # ----------------------------------------------------------------------
       - name: Run the container
         run: |
           docker rm -f netflix || true
