@@ -1,26 +1,33 @@
+# Workflow name displayed in GitHub Actions UI
 name: Build, Analyze, Scan
 
+# Trigger this workflow on pushes to the main branch
 on:
   push:
     branches:
       - main
 
 jobs:
+  # First job: build, analyze code with SonarQube, install Trivy, and build/push Docker image
   build-analyze-scan:
     name: Build
+    # Use the self-hosted runner with label 'build-runner' (on first Oracle VM)
     runs-on: build-runner
     steps:
+      # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Shallow clones disabled for better SonarQube analysis
 
+      # Step 2: Run SonarQube scan to analyze code quality and security
       - name: Build and analyze with SonarQube
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
+      # Step 3: Install Trivy vulnerability scanner and run filesystem scan
       - name: Install Trivy
         run: |
           sudo apt-get install wget apt-transport-https gnupg lsb-release -y
@@ -28,8 +35,10 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update
           sudo apt-get install trivy -y
+          # Scan the current filesystem for vulnerabilities
           trivy fs .
 
+      # Step 4: Build Docker image with TMDB API key as build argument, tag, and push to Docker Hub
       - name: Docker build and push
         run: |
           docker build --build-arg TMDB_V3_API_KEY=${{ secrets.TMDB_API_KEY }} -t netflix .
@@ -37,10 +46,13 @@ jobs:
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
+  # Second job: deploy the application – depends on build-analyze-scan success
   deploy:
     needs: build-analyze-scan
+    # Use the self-hosted runner with label 'deploy-runner' (on second Oracle VM)
     runs-on: deploy-runner
     steps:
+      # Step 1: Install Trivy on the deploy runner (in case not already present)
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -50,12 +62,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
+      # Step 2: Pull the latest Docker image from Docker Hub
       - name: Pull the docker image
         run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
+      # Step 3: Scan the pulled Docker image for vulnerabilities
       - name: Trivy image scan
         run: trivy image ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
+      # Step 4: Stop and remove any existing container named 'netflix', then run a new container
       - name: Run the container netflix
         run: |
           docker rm -f netflix || true
