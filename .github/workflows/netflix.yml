@@ -6,33 +6,39 @@ on:
       - main
 
 jobs:
+  # --------------------------------------------------------------------------
+  # Job 1: Build, SonarCloud analysis, Trivy file scan, Docker build & push
+  # --------------------------------------------------------------------------
   build-analyze-scan:
     name: Build and Analyze
     runs-on: build-runner
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # required for better SonarCloud analysis
 
+      # SonarScanner CLI needs unzip
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      # SonarCloud scan with explicit host URL
+      # SonarCloud scan
       - name: SonarCloud Scan
         uses: sonarsource/sonarqube-scan-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io   # ← Required for SonarCloud
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}   # = https://sonarcloud.io
 
-      # Quality gate check (also needs host URL)
+      # Block pipeline if quality gate fails
       - name: SonarCloud Quality Gate check
         uses: sonarsource/sonarqube-quality-gate-action@master
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
+      # Install Trivy
       - name: Install Trivy
         run: |
           sudo apt-get install wget apt-transport-https gnupg lsb-release -y
@@ -41,9 +47,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
+      # Trivy filesystem scan – fail on HIGH or CRITICAL vulnerabilities
       - name: Trivy filesystem scan
         run: trivy fs --severity HIGH,CRITICAL --exit-code 1 .
 
+      # Docker layer caching setup
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
@@ -55,6 +63,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx-
 
+      # Build and push Docker image (with layer caching)
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
@@ -65,15 +74,21 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
+      # Move new cache to old location (for next run)
       - name: Move cache
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+  # --------------------------------------------------------------------------
+  # Job 2: Deploy – only runs if first job succeeds
+  # --------------------------------------------------------------------------
   deploy:
     needs: build-analyze-scan
     runs-on: deploy-runner
+
     steps:
+      # Install Trivy (if not already present)
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -86,6 +101,7 @@ jobs:
       - name: Pull the Docker image
         run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
+      # Scan the pulled image – fail on HIGH/CRITICAL
       - name: Trivy image scan
         run: trivy image --severity HIGH,CRITICAL --exit-code 1 ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
