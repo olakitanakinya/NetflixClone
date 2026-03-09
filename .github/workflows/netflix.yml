@@ -1,4 +1,4 @@
-name: Build,Analyze,Scan
+name: Build, Analyze, Scan
 
 on:
   push:
@@ -8,49 +8,55 @@ on:
 jobs:
   build-analyze-scan:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: build-runner
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v2
         with:
           fetch-depth: 0
 
-      - uses: sonarsource/sonarqube-scan-action@master
+      - name: Build and analyze with SonarQube
+        uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - name: install trivy
+      - name: Install Trivy
         run: |
-          #install trivy
           sudo apt-get install wget apt-transport-https gnupg lsb-release -y
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update
           sudo apt-get install trivy -y
-          #Command to scan files
           trivy fs .
 
       - name: Docker build and push
         run: |
-          #run commands to build and push docker images
-          docker build --build-arg TMDB_V3_API_KEY=7a706be63473b419fb6cf163a8ff56e4 -t netflix .
-          docker tag netflix olakitanakinya/netflix:latest
-          docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
-          docker push olakitanakinya/netflix:latest
-        env:
-          DOCKER_CLI_ACI: 1
+          docker build --build-arg TMDB_V3_API_KEY=${{ secrets.TMDB_API_KEY }} -t netflix .
+          docker tag netflix ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
   deploy:
     needs: build-analyze-scan
-    runs-on: [aws-netflix]
+    runs-on: deploy-runner
     steps:
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy -y
+
       - name: Pull the docker image
-        run: docker pull olakitanakinya/netflix:latest
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
       - name: Trivy image scan
-        run: trivy image olakitanakinya/netflix:latest
+        run: trivy image ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
 
       - name: Run the container netflix
         run: |
           docker rm -f netflix || true
-          docker run -d --name netflix -p 8081:80 olakitanakinya/netflix:latest
+          docker run -d --name netflix -p 8081:80 ${{ secrets.DOCKERHUB_USERNAME }}/netflix:latest
