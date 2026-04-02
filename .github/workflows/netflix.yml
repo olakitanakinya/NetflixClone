@@ -22,18 +22,18 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      # SonarCloud temporarily disabled – uncomment after fixing branch config
-      # - name: SonarCloud Scan
-      #   uses: sonarsource/sonarqube-scan-action@v2
-      #   with:
-      #     args: >
-      #       -Dsonar.organization=olakitanakinya
-      #       -Dsonar.projectKey=NetflixClone
-      #       -Dsonar.branch.name=main
-      #       -Dsonar.branch.target=main
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+       SonarCloud temporarily disabled – uncomment after fixing branch config
+       - name: SonarCloud Scan
+         uses: sonarsource/sonarqube-scan-action@v2
+         with:
+           args: >
+             -Dsonar.organization=olakitanakinya
+             -Dsonar.projectKey=NetflixClone
+             -Dsonar.branch.name=main
+             -Dsonar.branch.target=main
+         env:
+           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Install Trivy
         run: |
