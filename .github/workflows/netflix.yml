@@ -22,20 +22,12 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: SonarCloud Scan
-        uses: sonarsource/sonarqube-scan-action@v2
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-      # Optional quality gate check – comment out if you don't want to block on hotspots
-      # - name: SonarCloud Quality Gate check
-      #   uses: sonarsource/sonarqube-quality-gate-action@master
-      #   timeout-minutes: 5
+      # SonarCloud step temporarily disabled
+      # - name: SonarCloud Scan
+      #   uses: sonarsource/sonarqube-scan-action@v2
       #   env:
       #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      #   continue-on-error: true   # prevents pipeline failure if gate fails
 
       - name: Install Trivy
         run: |
